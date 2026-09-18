@@ -6,7 +6,7 @@ const githubLogin = (req, res) => {
     `https://github.com/login/oauth/authorize` +
     `?client_id=${process.env.GITHUB_CLIENT_ID}` +
     `&redirect_uri=${process.env.GITHUB_CALLBACK_URL}` +
-    `&scope=read:user user:email`;
+    `&scope=repo%20read:user%20user:email`;
 
   res.redirect(githubAuthUrl);
 };
@@ -132,9 +132,66 @@ const logout = (req, res) => {
   });
 };
 
+const getRepositories = async (req, res) => {
+  try {
+    // Check if user is logged in
+    if (!req.session.userId) {
+      return res.status(401).json({
+        message: "Not logged in",
+      });
+    }
+
+    // Find user in MongoDB
+    const user = await User.findById(req.session.userId);
+
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found",
+      });
+    }
+
+    // Check GitHub token
+    if (!user.githubAccessToken) {
+      return res.status(401).json({
+        message: "GitHub access token not found",
+      });
+    }
+
+    // Get repositories from GitHub
+    const response = await axios.get(
+      "https://api.github.com/user/repos",
+      {
+        headers: {
+          Authorization: `Bearer ${user.githubAccessToken}`,
+          Accept: "application/vnd.github+json",
+        },
+
+        params: {
+          visibility: "all",
+          affiliation: "owner,collaborator,organization_member",
+          per_page: 100,
+        },
+      }
+    );
+
+    // Send repositories to React
+    res.json(response.data);
+  } catch (error) {
+    console.error(
+      "Failed to fetch repositories:",
+      error.response?.data || error.message
+    );
+
+    res.status(500).json({
+      message: "Failed to fetch repositories",
+    });
+  }
+};
+
 module.exports = {
   githubLogin,
   githubCallback,
   getCurrentUser,
+  getRepositories,
   logout,
 };
