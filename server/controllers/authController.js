@@ -188,10 +188,212 @@ const getRepositories = async (req, res) => {
   }
 };
 
+const getRepositoryFiles = async (req, res) => {
+  try {
+    // Check login
+    if (!req.session.userId) {
+      return res.status(401).json({
+        message: "Not logged in",
+      });
+    }
+
+    // Get owner and repo from URL
+    const { owner, repo } = req.params;
+
+    // Find current user
+    const user = await User.findById(req.session.userId);
+
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found",
+      });
+    }
+
+    if (!user.githubAccessToken) {
+      return res.status(401).json({
+        message: "GitHub access token not found",
+      });
+    }
+
+    // ------------------------------------------------
+    // STEP 1: Get repository information
+    // ------------------------------------------------
+
+    const repoResponse = await axios.get(
+      `https://api.github.com/repos/${owner}/${repo}`,
+      {
+        headers: {
+          Authorization: `Bearer ${user.githubAccessToken}`,
+          Accept: "application/vnd.github+json",
+        },
+      }
+    );
+
+    const defaultBranch = repoResponse.data.default_branch;
+
+    // ------------------------------------------------
+    // STEP 2: Get repository tree
+    // ------------------------------------------------
+
+    const treeResponse = await axios.get(
+      `https://api.github.com/repos/${owner}/${repo}/git/trees/${defaultBranch}?recursive=1`,
+      {
+        headers: {
+          Authorization: `Bearer ${user.githubAccessToken}`,
+          Accept: "application/vnd.github+json",
+        },
+      }
+    );
+
+    const tree = treeResponse.data.tree;
+
+    // ------------------------------------------------
+    // STEP 3: Get only files
+    // ------------------------------------------------
+
+    const allFiles = tree.filter(
+      (item) => item.type === "blob"
+    );
+
+    console.log("Total files:", allFiles.length);
+
+    // ------------------------------------------------
+    // STEP 4: Filter files useful for our project
+    // ------------------------------------------------
+
+    const ignoredFolders = [
+      "node_modules/",
+      ".git/",
+      "dist/",
+      "build/",
+      ".next/",
+      "coverage/",
+    ];
+
+    const ignoredFiles = [
+      "package-lock.json",
+      "yarn.lock",
+      "pnpm-lock.yaml",
+    ];
+
+    const allowedExtensions = [
+      ".js",
+      ".jsx",
+      ".ts",
+      ".tsx",
+      ".py",
+      ".java",
+      ".c",
+      ".cpp",
+      ".cs",
+      ".go",
+      ".php",
+      ".rb",
+      ".html",
+      ".css",
+      ".scss",
+      ".json",
+      ".md",
+      ".env.example",
+      ".yml",
+      ".yaml",
+      ".xml",
+      ".sql",
+    ];
+
+    const requiredFiles = allFiles.filter((file) => {
+      // Ignore folders
+      const insideIgnoredFolder = ignoredFolders.some((folder) =>
+        file.path.startsWith(folder)
+      );
+
+      if (insideIgnoredFolder) {
+        return false;
+      }
+
+      // Ignore files
+      if (ignoredFiles.includes(file.path)) {
+        return false;
+      }
+
+      // Check extension
+      return allowedExtensions.some((extension) =>
+        file.path.endsWith(extension)
+      );
+    });
+
+    console.log(
+      "Required files:",
+      requiredFiles.length
+    );
+
+    // ------------------------------------------------
+    // STEP 5: Get file contents
+    // ------------------------------------------------
+
+    const files = [];
+
+    for (const file of requiredFiles) {
+      try {
+        const fileResponse = await axios.get(
+          `https://api.github.com/repos/${owner}/${repo}/contents/${file.path}?ref=${defaultBranch}`,
+          {
+            headers: {
+              Authorization: `Bearer ${user.githubAccessToken}`,
+              Accept: "application/vnd.github+json",
+            },
+          }
+        );
+
+        const fileData = fileResponse.data;
+
+        // GitHub returns base64 encoded content
+        const content = Buffer.from(
+          fileData.content,
+          "base64"
+        ).toString("utf-8");
+
+        files.push({
+          path: file.path,
+          name: file.path.split("/").pop(),
+          size: file.size,
+          content: content,
+        });
+      } catch (error) {
+        console.log(
+          `Could not fetch ${file.path}`
+        );
+      }
+    }
+
+    // ------------------------------------------------
+    // STEP 6: Send everything to React
+    // ------------------------------------------------
+
+    res.json({
+      repository: `${owner}/${repo}`,
+      branch: defaultBranch,
+      totalFiles: files.length,
+      files: files,
+    });
+
+  } catch (error) {
+    console.error(
+      "Repository files error:",
+      error.response?.data || error.message
+    );
+
+    res.status(500).json({
+      message: "Failed to fetch repository files",
+    });
+  }
+};
+
 module.exports = {
   githubLogin,
   githubCallback,
   getCurrentUser,
   getRepositories,
+  getRepositoryFiles,
   logout,
 };
