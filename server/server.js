@@ -2,7 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
 const session = require("express-session");
-
+const ragRoutes = require("./routes/ragRoutes");
 const connectDB = require("./config/db");
 const authRoutes = require("./routes/authRoutes");
 
@@ -42,7 +42,7 @@ app.use("/api/auth", authRoutes);
 app.get("/", (req, res) => {
   res.send("GitHub Repo Explainer API is running");
 });
-
+app.use("/api/rag", ragRoutes);
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {

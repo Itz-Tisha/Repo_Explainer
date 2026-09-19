@@ -13,6 +13,8 @@ function Home() {
 
   const [loadingFiles, setLoadingFiles] = useState(false);
 
+  const [processingRepo, setProcessingRepo] = useState(false);
+
   // -----------------------------------------
   // Get current user
   // -----------------------------------------
@@ -24,6 +26,9 @@ function Home() {
       .then((response) => response.json())
       .then((data) => {
         setUser(data);
+      })
+      .catch((error) => {
+        console.error("Failed to get user:", error);
       });
   }, []);
 
@@ -96,6 +101,64 @@ function Home() {
   };
 
   // -----------------------------------------
+  // Process Repository
+  // -----------------------------------------
+  // This sends the selected repository to the backend.
+  //
+  // Backend will:
+  // 1. Get repository files
+  // 2. Split files into chunks
+  // 3. Create embeddings
+  // 4. Store chunks + embeddings in MongoDB
+  // -----------------------------------------
+
+  const handleProcessRepository = async () => {
+    if (!selectedRepo) {
+      alert("Please select a repository first.");
+      return;
+    }
+
+    try {
+      setProcessingRepo(true);
+
+      const owner = selectedRepo.owner.login;
+      const repoName = selectedRepo.name;
+
+      const response = await fetch(
+        `http://localhost:5000/api/rag/ingest/${owner}/${repoName}`,
+        {
+          method: "POST",
+          credentials: "include",
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        alert(data.message || "Failed to process repository");
+        return;
+      }
+
+      console.log("Repository processing result:", data);
+
+      alert(
+        `Repository processed successfully!\n\n` +
+          `Repository: ${data.repository}\n` +
+          `Files processed: ${data.filesProcessed}\n` +
+          `Chunks stored: ${data.chunksStored}`
+      );
+    } catch (error) {
+      console.error("Processing error:", error);
+
+      alert(
+        "Failed to process repository. Check the backend console."
+      );
+    } finally {
+      setProcessingRepo(false);
+    }
+  };
+
+  // -----------------------------------------
   // Loading user
   // -----------------------------------------
 
@@ -109,6 +172,10 @@ function Home() {
 
   return (
     <div style={{ padding: "30px" }}>
+      {/* -------------------------------- */}
+      {/* User Information */}
+      {/* -------------------------------- */}
+
       <h1>
         Welcome {user.displayName || user.username}
       </h1>
@@ -119,9 +186,15 @@ function Home() {
         width="100"
       />
 
-      <p>GitHub username: {user.username}</p>
+      <p>
+        GitHub username: {user.username}
+      </p>
 
       <hr />
+
+      {/* -------------------------------- */}
+      {/* Repository Button */}
+      {/* -------------------------------- */}
 
       <button
         onClick={handleViewRepositories}
@@ -140,6 +213,12 @@ function Home() {
 
       <h2>My Repositories</h2>
 
+      {repos.length === 0 && !loadingRepos && (
+        <p>
+          Click "View My Repositories" to load your repositories.
+        </p>
+      )}
+
       {repos.map((repo) => (
         <div
           key={repo.id}
@@ -147,13 +226,13 @@ function Home() {
             border: "1px solid gray",
             padding: "15px",
             marginBottom: "10px",
+            borderRadius: "8px",
           }}
         >
           <h3>{repo.name}</h3>
 
           <p>
-            {repo.description ||
-              "No description"}
+            {repo.description || "No description"}
           </p>
 
           <p>
@@ -184,6 +263,39 @@ function Home() {
             {selectedRepo.name}
           </h2>
 
+          {/* -------------------------------- */}
+          {/* Process Repository Button */}
+          {/* -------------------------------- */}
+
+          <button
+            onClick={handleProcessRepository}
+            disabled={
+              processingRepo || loadingFiles
+            }
+            style={{
+              padding: "12px 20px",
+              marginBottom: "20px",
+              cursor:
+                processingRepo || loadingFiles
+                  ? "not-allowed"
+                  : "pointer",
+            }}
+          >
+            {processingRepo
+              ? "Processing Repository..."
+              : "Process Repository"}
+          </button>
+
+          <p>
+            This will chunk the repository files,
+            create embeddings, and store them in
+            MongoDB Atlas Vector Search.
+          </p>
+
+          {/* -------------------------------- */}
+          {/* Repository Files */}
+          {/* -------------------------------- */}
+
           {loadingFiles ? (
             <p>
               Loading repository files...
@@ -203,6 +315,7 @@ function Home() {
                     border: "1px solid #ddd",
                     padding: "10px",
                     marginBottom: "8px",
+                    borderRadius: "5px",
                   }}
                 >
                   <strong>
@@ -220,6 +333,10 @@ function Home() {
       )}
 
       <hr />
+
+      {/* -------------------------------- */}
+      {/* Logout */}
+      {/* -------------------------------- */}
 
       <button
         onClick={() => {
