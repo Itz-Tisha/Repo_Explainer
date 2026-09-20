@@ -1,5 +1,5 @@
 const axios = require("axios");
-
+const mongoose = require("mongoose");
 const User = require("../models/User");
 const Embedding = require("../models/Embedding");
 
@@ -241,6 +241,301 @@ const ingestRepository = async (req, res) => {
   }
 };
 
+// -----------------------------------------
+// Ask Question
+// -----------------------------------------
+
+const askQuestion = async (req, res) => {
+  try {
+    // -----------------------------------------
+    // Check login
+    // -----------------------------------------
+
+    if (!req.session.userId) {
+      return res.status(401).json({
+        message: "Not logged in",
+      });
+    }
+
+    // -----------------------------------------
+    // Get parameters
+    // -----------------------------------------
+
+    const { owner, repo } = req.params;
+
+    const { question } = req.body;
+
+    if (!question || question.trim() === "") {
+      return res.status(400).json({
+        message: "Question is required",
+      });
+    }
+
+    // -----------------------------------------
+    // Find user
+    // -----------------------------------------
+
+    const user = await User.findById(
+      req.session.userId
+    );
+
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found",
+      });
+    }
+
+    // -----------------------------------------
+    // Create embedding for question
+    // -----------------------------------------
+
+    console.log(
+      "Creating embedding for question..."
+    );
+
+    const questionEmbedding =
+      await createEmbedding(question);
+
+    console.log(
+      "Question embedding created"
+    );
+
+    // -----------------------------------------
+    // Search MongoDB Vector Search
+    // -----------------------------------------
+
+    const repository =
+      `${owner}/${repo}`;
+
+    // -----------------------------------------
+// Create embedding for question
+// -----------------------------------------
+
+console.log(
+  "Creating embedding for question..."
+);
+
+
+console.log(
+  "Question embedding created"
+);
+
+// -----------------------------------------
+// Check stored chunks
+// -----------------------------------------
+
+const storedChunks =
+  await Embedding.countDocuments({
+    userId: user._id,
+    repository: repository,
+  });
+
+console.log(
+  "Chunks found in MongoDB for this user/repository:",
+  storedChunks
+);
+
+// -----------------------------------------
+// Search MongoDB Vector Search
+// -----------------------------------------
+
+console.log(
+  "Searching relevant chunks..."
+);
+
+    // const results =
+    //   await Embedding.aggregate([
+    //     {
+    //       $vectorSearch: {
+    //         index: "vector_index",
+
+    //         path: "embedding",
+
+    //         queryVector:
+    //           questionEmbedding,
+
+    //         numCandidates: 100,
+
+    //         limit: 5,
+
+    //         // filter: {
+    //         //   userId:
+    //         //     new mongoose.Types.ObjectId(
+    //         //       user._id
+    //         //     ),
+
+    //         //   repository: repository,
+    //         // },
+    //       },
+    //     },
+
+    //     {
+    //       $project: {
+    //         _id: 0,
+
+    //         content: 1,
+
+    //         filePath: 1,
+
+    //         chunkIndex: 1,
+
+    //         score: {
+    //           $meta:
+    //             "vectorSearchScore",
+    //         },
+    //       },
+    //     },
+    //   ]);
+    const results = await Embedding.aggregate([
+  {
+    $vectorSearch: {
+      index: "vector_index",
+      path: "embedding",
+      queryVector: questionEmbedding,
+      numCandidates: 100,
+      limit: 5,
+
+      filter: {
+        userId: new mongoose.Types.ObjectId(user._id),
+        repository: repository,
+      },
+    },
+  },
+  {
+    $project: {
+      _id: 0,
+      content: 1,
+      filePath: 1,
+      chunkIndex: 1,
+      repository: 1,
+      userId: 1,
+      score: {
+        $meta: "vectorSearchScore",
+      },
+    },
+  },
+]);
+
+    console.log(
+      `Found ${results.length} relevant chunks`
+    );
+
+    // -----------------------------------------
+    // Check if chunks were found
+    // -----------------------------------------
+
+    if (results.length === 0) {
+      return res.json({
+        answer:
+          "I could not find relevant information in this repository.",
+        sources: [],
+      });
+    }
+
+    // -----------------------------------------
+    // Create context
+    // -----------------------------------------
+
+    const context = results
+      .map((result, index) => {
+        return `
+--- Source ${index + 1} ---
+File: ${result.filePath}
+Chunk: ${result.chunkIndex}
+
+${result.content}
+`;
+      })
+      .join("\n");
+
+    // -----------------------------------------
+    // Create prompt
+    // -----------------------------------------
+
+    const prompt = `
+You are a GitHub repository code assistant.
+
+Answer the user's question using ONLY
+the repository context provided below.
+
+If the answer cannot be found in the
+provided context, say:
+
+"I could not find the answer in the provided repository context."
+
+Do not invent code or information.
+
+When useful, mention the file name
+where the information was found.
+
+USER QUESTION:
+${question}
+
+REPOSITORY CONTEXT:
+${context}
+
+Answer clearly and concisely.
+`;
+
+    // -----------------------------------------
+    // Send context to Ollama
+    // -----------------------------------------
+
+    console.log(
+      "Sending context to Ollama..."
+    );
+
+    const ollamaResponse =
+      await axios.post(
+        "http://localhost:11434/api/generate",
+        {
+          model: "llama3.2:3b",
+
+          prompt: prompt,
+
+          stream: false,
+        }
+      );
+
+    const answer =
+      ollamaResponse.data.response;
+
+    // -----------------------------------------
+    // Return answer
+    // -----------------------------------------
+
+    res.json({
+      answer: answer,
+
+      sources: results.map(
+        (result) => ({
+          filePath:
+            result.filePath,
+
+          chunkIndex:
+            result.chunkIndex,
+
+          score:
+            result.score,
+        })
+      ),
+    });
+
+  } catch (error) {
+    console.error(
+      "Question answering error:",
+      error.response?.data ||
+        error.message
+    );
+
+    res.status(500).json({
+      message:
+        "Failed to answer question",
+    });
+  }
+};
+
 module.exports = {
   ingestRepository,
+  askQuestion,
 };
